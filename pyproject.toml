@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+# `pytest` with no arguments runs the fast layers only. E2E is run explicitly:
+#   pytest tests/e2e
+testpaths = ["tests/unit", "tests/integration"]
+# Lets tests `import app` from the project root.
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+# The entry point only runs under `python -m app`; tests never execute it.
+# Excluding it is a deliberate choice, and one to look for before trusting a number.
+omit = ["app/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 2

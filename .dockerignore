@@ -1,0 +1,9 @@
+.venv
+__pycache__
+tests
+htmlcov
+.coverage
+coverage.json
+test-results
+app.db
+.git
