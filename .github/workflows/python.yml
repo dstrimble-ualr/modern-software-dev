@@ -1,10 +1,16 @@
-name: CI
+name: Python example (python-example-project)
 
 on:
   push:
     branches: [ "**" ]
+    paths: [ "python-example-project/**", ".github/workflows/python.yml" ]
   pull_request:
     branches: [ main ]
+    paths: [ "python-example-project/**", ".github/workflows/python.yml" ]
+
+defaults:
+  run:
+    working-directory: python-example-project
 
 jobs:
   fast-tests:
@@ -17,6 +23,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: python-example-project/requirements.txt
 
       - run: pip install -r requirements.txt
 
@@ -35,8 +42,8 @@ jobs:
       - name: Upload HTML coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: htmlcov/
+          name: python-coverage-report
+          path: python-example-project/htmlcov/
 
   e2e-tests:
     name: End-to-end tests (Playwright)
@@ -49,6 +56,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: python-example-project/requirements.txt
 
       - run: pip install -r requirements.txt
 
@@ -62,5 +70,5 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-results
-          path: test-results/
+          name: python-playwright-results
+          path: python-example-project/test-results/

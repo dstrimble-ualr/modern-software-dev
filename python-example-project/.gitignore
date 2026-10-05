@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# App data
+app.db
+
+# Coverage output
+.coverage
+coverage.json
+htmlcov/
+
+# Playwright output
+test-results/
