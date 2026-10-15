@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-example
+  labels:
+    app: python-example
+spec:
+  replicas: 1                       # one pod: the cluster is shared and short on memory
+  revisionHistoryLimit: 5           # how far back `kubectl rollout undo` can go
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                   # start the new pod first...
+      maxUnavailable: 0             # ...and stop the old one only once the new one is ready
+  selector:
+    matchLabels:
+      app: python-example
+  template:
+    metadata:
+      labels:
+        app: python-example
+    spec:
+      containers:
+        - name: app
+          image: python-example-project   # kustomization.yaml swaps in the real image
+          ports:
+            - name: http
+              containerPort: 8000
+          # Not "ready" until it serves the login page. A rolling update waits for
+          # this before moving on, so a pod that can't serve never gets traffic.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # Measured: ~22 MiB idle and under load; ~90m CPU at 20 virtual users.
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 96Mi

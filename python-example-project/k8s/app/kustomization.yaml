@@ -1,0 +1,12 @@
+# What CI applies on every deploy: kubectl apply -k k8s/app
+# The deploy job first runs `kustomize edit set image` to pin the tag to the commit SHA.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: python-example
+resources:
+  - deployment.yaml
+  - service.yaml
+images:
+  - name: python-example-project
+    newName: dstrimble83/python-example-project
+    newTag: set-by-ci

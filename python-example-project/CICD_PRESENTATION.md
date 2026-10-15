@@ -3,21 +3,23 @@ marp: true
 paginate: true
 ---
 
-# CI/CD with GitHub Actions
+# CI/CD with GitHub Actions, k6, and Kubernetes
 
-### Running every test on every merge, for `python-example-project`
+### From a merged PR to running pods, for `python-example-project`
 
-30–45 minutes. One workflow file, three jobs, two ways to make it go red.
+30–45 minutes. One pipeline, one k6 script used two ways, one cluster.
 
 <!--
-Timing budget is in each slide title. The slides sum to 43 minutes. For a 30-minute version, skip the
-slides marked (optional) and show the LIVE demos from runs you started before class instead of pushing live.
+Timing budget is in each slide title. The core slides sum to 41 minutes. Slides marked (optional)
+add 12 more: skip them for a 45-minute slot. For about 35 minutes, also skip "LIVE: a red PR" and
+"LIVE: break a rollout on purpose".
 
 Before class:
-  1. In the repo root, make sure main is green on the Actions tab.
-  2. Push the two demo branches (LIVE slides below) and open them as draft PRs, so their runs have
-     finished by the time you get there. You can still push a fresh commit live if time allows.
-  3. Open three tabs: the repo's Actions tab, the open PR list, and .github/workflows/python.yml.
+  1. Actions tab: the latest run on main is green, including "Deploy to Linode".
+  2. Demo PRs #2 (red unit test) and #3 (127.0.0.1 bind) are open as drafts with finished runs.
+  3. Laptop: k6 installed (`brew install k6`), kubectl pointed at the class cluster
+     (`kubectl -n python-example get pods` works), the app running locally (`make run`) for the load demo.
+  4. Tabs open: the Actions tab, the PR list, .github/workflows/python.yml, k6/smoke.js.
 Renders with Marp (VS Code extension or `npx @marp-team/marp-cli`); reads fine as plain Markdown too.
 Follows TESTING_PRESENTATION.md: students should already know the three test layers.
 -->
@@ -28,13 +30,14 @@ Follows TESTING_PRESENTATION.md: students should already know the three test lay
 
 | Minutes | Topic |
 |---|---|
-| 0–8 | Why CI/CD, the three terms, and what we built |
-| 8–25 | Reading the workflow, one block at a time |
-| 25–35 | LIVE: a green run, a red PR, and a bug only the pipeline sees |
-| 35–43 | Protecting `main`, debugging CI, what deployment adds, wrap-up |
+| 0–9 | Why CI/CD, the three terms, the pipeline, the vocabulary |
+| 9–16 | Triggers and the test jobs |
+| 16–24 | k6: a smoke test, the same script as a load test, and the bug only load finds |
+| 24–35 | Deploying: rolling updates, the k6 gate, rollback, load on the real cluster |
+| 35–41 | A red PR, protecting `main`, wrap-up |
 
 By the end you should be able to open `.github/workflows/python.yml`, say what runs when,
-and explain why a PR got a red X.
+explain why a PR got a red X, and run a load test against the cluster.
 
 ---
 
@@ -45,9 +48,10 @@ Last session we wrote 15 tests. They help only if someone runs them.
 - "It passed on my machine": a dependency in your venv that isn't in `requirements.txt`
 - "I forgot to run the E2E tests": they take longer, so they get skipped
 - "Who broke `main`?": three PRs merged this morning, and none of them ran anything
+- "It's merged. Is it live?": someone has to remember to deploy, and do it the same way every time
 
-**Continuous integration** fixes this with one rule: every change gets tested
-**automatically, on a clean machine, before and after it reaches `main`.**
+**Continuous integration:** every change gets tested **automatically, on a clean machine,
+before and after it reaches `main`.** **Continuous deployment:** every green `main` ships itself.
 
 <!--
 Ask: who has pulled main and found it broken? What did it cost to find which commit did it?
@@ -56,23 +60,23 @@ CI makes "which commit broke it" a question you never have to ask: every commit 
 
 ---
 
-## Three terms people mix up `⏱ 3 min`
+## Three terms people mix up `⏱ 2 min`
 
 | Term | What happens automatically | Who decides to release |
 |---|---|---|
 | **Continuous Integration** | Every push and PR is built and tested | n/a, nothing is released |
 | **Continuous Delivery** | ...and every green `main` produces a **ready-to-ship artifact** | A human clicks "deploy" |
-| **Continuous Deployment** | ...and every green `main` **goes to production** | Nobody: the pipeline does it |
+| **Continuous Deployment** | ...and every green `main` **goes live** | Nobody: the pipeline does it |
 
 Each row includes the one above it. **CD** means either of the bottom two, depending on who's talking.
 
-**This project today:** CI, plus the first half of delivery. The pipeline builds the Docker image,
-proves it starts, and saves it. Nothing is deployed anywhere.
+**This project:** continuous deployment to the class cluster. Every green merge to `main`
+is pushed, rolled out, smoke-tested in place, and **rolled back by itself** if the smoke test fails.
 
 <!--
 The difference between delivery and deployment is a human decision, not a technical one.
-Plenty of good teams stop at delivery on purpose: a person picks when to release.
-We'll add the deploy step in a later unit. Today is about the gate, not the destination.
+Plenty of good teams stop at delivery on purpose. Going all the way is only safe because of what
+runs before (tests) and after (the k6 gate and automatic rollback). That's what most of today is about.
 -->
 
 ---
@@ -83,23 +87,22 @@ We'll add the deploy step in a later unit. Today is about the gate, not the dest
  PR opened / commit pushed / merged to main
                 │
                 ▼
-┌───────────────────────────────┐    ┌─────────────────────┐    ┌──────────────────────────┐
-│ fast-tests        (×3 Pythons)│    │ e2e-tests           │    │ docker-image             │
-│  pip install                  │    │  install Chromium   │    │  docker build            │
-│  pytest tests/unit            │──► │  pytest tests/e2e   │──► │  docker run              │
-│  pytest tests/integration     │    │  screenshots on     │    │  smoke_test.py           │
-│  coverage → summary + report  │    │  failure            │    │  save image (main only)  │
-└───────────────────────────────┘    └─────────────────────┘    └──────────────────────────┘
-        ~40 s, in parallel                  ~1 min                       ~40 s
+┌──────────────────────┐   ┌──────────────┐   ┌───────────────────┐   ┌──────────────────────────┐
+│ fast-tests  (×3 Py)  │   │ e2e-tests    │   │ docker-image      │   │ deploy      (main only)  │
+│  pytest tests/unit   │──►│  Chromium    │──►│  docker build     │──►│  push to Docker Hub      │
+│  pytest tests/integ. │   │  pytest e2e  │   │  docker run       │   │  kubectl apply + rollout │
+│  coverage → summary  │   │              │   │  k6 smoke test    │   │  k6 smoke on live pods   │
+└──────────────────────┘   └──────────────┘   │  save image       │   │  roll back on failure    │
+                                              └───────────────────┘   └──────────────────────────┘
 ```
 
-Fast and cheap first, slow and expensive last. Each arrow means **"only if everything to the left passed."**
+Fast and cheap first, slow and risky last. Each arrow means **"only if everything to the left passed."**
 
-It's the test pyramid from last time, now drawn as a pipeline.
+Plus a separate button, **Python example load test (k6)**: the same k6 script, as many users as you ask for.
 
 <!--
-Point out that the third box is new: the first two jobs test the code, the third tests the thing we'd ship.
-Times are rough; show the real ones on the Actions tab.
+On a PR, the first three run and deploy shows as skipped. On main, all four run.
+Show the real job times on the Actions tab: roughly 15 s, 35 s, 20 s, and about a minute for the deploy.
 -->
 
 ---
@@ -110,45 +113,36 @@ Times are rough; show the real ones on the Actions tab.
 |---|---|---|
 | **Workflow** | One YAML file in `.github/workflows/` | `python.yml` |
 | **Event** | What starts it | `push`, `pull_request`, `workflow_dispatch` |
-| **Job** | A group of steps on **one fresh machine** | `fast-tests`, `e2e-tests`, `docker-image` |
+| **Job** | A group of steps on **one fresh machine** | `fast-tests`, ..., `deploy` |
 | **Runner** | That machine: a clean Ubuntu VM, thrown away after the job | `runs-on: ubuntu-latest` |
 | **Step** | One shell command (`run:`) or one reusable action (`uses:`) | `run: pytest tests/unit` |
-| **Action** | A packaged, reusable step someone published | `actions/checkout@v4` |
-| **Artifact** | A file a job saves for you to download | coverage HTML, the Docker image |
+| **Action** | A packaged, reusable step someone published | `grafana/setup-k6-action@v1` |
+| **Artifact** | A file a job saves for you to download | coverage HTML, the Docker image, the k6 report |
+| **Secret** | A credential the log never prints | `DOCKERHUB_TOKEN`, `KUBECONFIG` |
 
-**Jobs share nothing.** That's why every job starts with checkout and install again.
-
-<!--
-The "fresh machine" point causes most beginner confusion. Your laptop has years of installed packages;
-the runner has nothing but Ubuntu, Python, and Docker. That's a feature: it's the honest test.
--->
+**Jobs share nothing.** That's why every job starts with checkout, and why the image travels as an artifact.
 
 ---
 
-## Where the file lives `⏱ 1 min`
+## Where the file lives (optional) `⏱ 1 min`
 
 ```
 modern-software-dev/                 ← the GitHub repo
 ├── .github/workflows/
 │   ├── node.yml                     ← the Node project's pipeline
-│   └── python.yml                   ← ours
+│   ├── python.yml                   ← ours
+│   └── python-load-test.yml         ← the load-test button
 ├── dstrimble-example-project/
 └── python-example-project/
 ```
 
-GitHub only reads workflows from `.github/workflows/` **at the repo root**. A `.github/` folder
-inside `python-example-project/` would be ignored. So every command needs to run in the subfolder:
+GitHub only reads workflows from `.github/workflows/` **at the repo root**, so every command runs in the subfolder:
 
 ```yaml
 defaults:
   run:
     working-directory: python-example-project
 ```
-
-<!--
-This is the monorepo pattern: one repo, several projects, one workflow per project.
-In your own team repo the project is probably at the root and you don't need `defaults`.
--->
 
 ---
 
@@ -163,20 +157,20 @@ on:
   workflow_dispatch:       # adds a "Run workflow" button on the Actions tab
 ```
 
-| You do | It runs? |
-|---|---|
-| Push commits to `feature/login` with no PR | No |
-| Open a PR from `feature/login` → `main` | **Yes**, and again on every push to that branch |
-| Merge the PR | **Yes**, on `main`: tests the merged result |
-| Click "Run workflow" | **Yes** |
+| You do | It runs? | Deploys? |
+|---|---|---|
+| Push commits to `feature/login` with no PR | No | No |
+| Open a PR from `feature/login` → `main` | **Yes**, and on every push to it | No |
+| Merge the PR | **Yes**, on `main`: tests the merged result | **Yes** |
+| Click "Run workflow" on `main` | **Yes** | **Yes** (a redeploy) |
 
-Why test again after merging? The PR tested *your branch*. `main` might have moved since then.
-The merge commit combines both, and nobody has tested it yet.
+Why test again after merging? The PR tested *your branch*. The merge commit combines it with whatever
+else landed on `main`, and nobody has tested that yet. It's also the commit that gets deployed.
 
 <!--
 There's no `paths:` filter (the Node workflow has one). With a filter, a PR that only touches the Node
 project skips this workflow. If this workflow is a required check, that PR then waits forever for a status
-that never arrives. Running an extra two minutes is cheaper than explaining that bug.
+that never arrives.
 -->
 
 ---
@@ -192,18 +186,12 @@ permissions:
   contents: read
 ```
 
-**Concurrency:** push three commits to a PR in a minute, and only the newest one matters.
-The older runs get cancelled. Runs on `main` are never cancelled, so every merge gets its own result.
+**Concurrency:** push three commits to a PR in a minute, and only the newest one matters, so older
+runs get cancelled. Runs on `main` are never cancelled; they queue. **Two deploys never run at once.**
 
 **Permissions:** each run gets a `GITHUB_TOKEN`. We ask for the least it needs: read the code.
-A test job has no reason to be able to push commits or edit issues.
 
 `${{ ... }}` is an **expression**: GitHub fills it in before the job starts.
-
-<!--
-Least privilege matters more than it looks. Workflows run code from PRs, and dependencies run code
-at install time. If something malicious runs, a read-only token limits what it can do.
--->
 
 ---
 
@@ -212,7 +200,6 @@ at install time. If something malicious runs, a read-only token limits what it c
 ```yaml
   fast-tests:
     name: Unit and integration tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -230,20 +217,17 @@ at install time. If something malicious runs, a read-only token limits what it c
         run: pytest tests/integration
 ```
 
-A **matrix** turns one job into three, one per version, running in parallel. The README promises
-"Python 3.12 or newer", and this is where we check that promise.
-
-`fail-fast: false` lets the other versions finish when one fails, so you can see which versions broke.
+A **matrix** turns one job into three, in parallel. The README promises "Python 3.12 or newer"; this checks it.
+`fail-fast: false` lets the others finish when one fails, so you see *which* versions broke.
 
 <!--
-Ask: why are unit and integration separate steps when `pytest` would run both? So the red X names the layer.
-"Unit tests failed" is a better first clue than "pytest failed".
-`cache: pip` keeps downloaded packages between runs, keyed on requirements.txt. Change that file and the cache resets.
+Why are unit and integration separate steps? So the red X names the layer.
+`cache: pip` keeps downloaded packages between runs, keyed on requirements.txt.
 -->
 
 ---
 
-## Conditional steps, summaries, artifacts `⏱ 2 min`
+## Conditional steps, summaries, artifacts (optional) `⏱ 2 min`
 
 ```yaml
       - name: Coverage (unit + integration)
@@ -253,210 +237,348 @@ Ask: why are unit and integration separate steps when `pytest` would run both? S
       - name: Add coverage table to the job summary
         if: matrix.python-version == '3.12'
         run: python scripts/coverage_summary.py >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload HTML coverage report
-        if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-coverage-report
-          path: python-example-project/htmlcov/
 ```
 
-- **`if:`** skips a step unless the condition is true. Coverage is the same on every version, so we measure it once.
-- **`$GITHUB_STEP_SUMMARY`**: anything you write to this file shows up as Markdown on the run's page.
-- **Artifacts**: files the runner saves before it is thrown away. Download them from the run page.
-
-<!--
-Artifact paths are relative to the repo root, not the working-directory default. That's why the
-path starts with python-example-project/. It's an easy mistake to make in a monorepo.
--->
+- **`if:`** skips a step unless the condition is true. Coverage is the same on every version, so measure it once.
+- **`$GITHUB_STEP_SUMMARY`**: anything written to this file shows up as Markdown on the run's page.
+- **Artifacts**: files the runner saves before it's thrown away. Download them from the run page.
 
 ---
 
-## Job 2: end-to-end, only if the fast tests pass `⏱ 2 min`
+## Job 2: end-to-end, only if the fast tests pass `⏱ 1 min`
 
 ```yaml
   e2e-tests:
-    needs: fast-tests   # only spend the slow minutes if the fast tests pass
+    needs: fast-tests
     steps:
-      ...
       - run: playwright install --with-deps chromium
       - run: pytest tests/e2e --screenshot only-on-failure
       - name: Upload failure screenshots
         if: failure()
-        uses: actions/upload-artifact@v4
 ```
 
-- **`needs:`** creates the arrow in the picture. If `fast-tests` fails, this job shows as **skipped**.
-- With a matrix, `needs: fast-tests` waits for **all three** versions to pass.
-- **`if: failure()`** runs a step only when an earlier step failed. A screenshot of the broken page
-  tells you more than a timeout message.
-
-The order is about cost: a unit test failure shows up in 40 seconds, so nobody waits for a browser download to learn about it.
+- **`needs:`** draws the arrow. If `fast-tests` fails, this job shows as **skipped**.
+- With a matrix, `needs: fast-tests` waits for **all three** versions.
+- **`if: failure()`** runs a step only when an earlier one failed: a screenshot beats a timeout message.
 
 ---
 
-## Job 3: test the thing you ship `⏱ 3 min`
+## Job 3: test the thing you ship `⏱ 2 min`
 
 ```yaml
   docker-image:
     needs: e2e-tests
-    env:
-      IMAGE: python-example-project:${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
       - run: docker build -t "$IMAGE" .
       - run: docker run -d --name app -p 8000:8000 "$IMAGE"
-      - run: python3 scripts/smoke_test.py http://localhost:8000
+      - name: Wait for the container to answer
+        run: curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://localhost:8000/
+      - uses: grafana/setup-k6-action@v1
+      - name: k6 smoke test against the container
+        run: k6 run -e BASE_URL=http://localhost:8000 k6/smoke.js
       - name: Show container logs
         if: always()
         run: docker logs app
 ```
 
-Jobs 1 and 2 test **the code in a checkout**. Users never run a checkout. They'd run the **image**.
-The image has its own Dockerfile, its own installed packages, and its own start command.
+Jobs 1 and 2 test **the code in a checkout**. Users run the **image**, which has its own Dockerfile,
+its own installed packages, and its own start command.
 
-A **smoke test** is a short check that the built thing turns on: it serves the page, login works,
-widgets come back. `scripts/smoke_test.py` checks four things using only the standard library.
-
-Tagging with `github.sha` (the commit ID) means every image traces back to exactly one commit.
+A **smoke test** asks one question: *does the built thing turn on and do the basics?*
 
 <!--
-Ask: look at the Dockerfile. It runs `pip install flask`, not `pip install -r requirements.txt`.
-The tests installed requirements.txt. If someone adds a runtime dependency to requirements.txt and imports it,
-which job catches it? Only this one: the container crashes on import, and the smoke test fails.
-(That's exercise 3.) `if: always()` means logs print even when the smoke test fails, which is when you need them.
+Look at the Dockerfile: `pip install flask`, not `pip install -r requirements.txt`. If someone adds a runtime
+dependency to requirements.txt, the tests pass and only this job catches the crash. (Exercise 3.)
 -->
 
 ---
 
-## Delivery, not deployment `⏱ 1 min`
+## k6: one script, one user journey `⏱ 2 min`
 
-```yaml
-      - name: Save the image as a release candidate
-        if: github.ref == 'refs/heads/main'
-        run: docker save "$IMAGE" | gzip > image.tar.gz
-      - name: Upload the release candidate
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-example-project-image
-          retention-days: 7
+```js
+export const options = {
+  vus: 1,                               // 1 virtual user...
+  duration: '10s',                      // ...for 10 seconds: a smoke test
+  thresholds: {
+    checks: ['rate>0.99'],              // more than 99% of checks pass
+    http_req_failed: ['rate<0.01'],     // fewer than 1% of requests fail
+    http_req_duration: ['p(95)<500'],   // 95% of requests finish in under 500 ms
+  },
+};
+
+export default function () {            // each virtual user runs this in a loop
+  http.get(`${BASE_URL}/`);                                 // the login page
+  http.get(`${BASE_URL}/api/widgets`, ...);                 // expect 401: no cookie yet
+  const login = http.post(`${BASE_URL}/api/login`, ...);
+  check(login, { 'login is 200': (r) => r.status === 200 });
+  http.get(`${BASE_URL}/api/widgets`);                      // the cookie jar sends the token
+  http.post(`${BASE_URL}/api/logout`);
+  sleep(1);                                                 // think time
+}
 ```
 
-On `main` only, the tested image is kept. It's a **release candidate**: the exact bytes that passed every check.
+- **Check:** one assertion, counted, never stops the test. **Threshold:** the pass/fail rule for the whole run.
+- Any threshold fails → k6 **exits 99** → the CI step goes red. That's the whole integration.
 
-**Build once, ship that build.** A deploy step later should pick up this file, not rebuild from source
-and hope it comes out the same.
+<!--
+Open k6/smoke.js for the real thing: it groups requests, checks every response, and guards against
+null bodies (a refused connection has no body; a check that throws would skip the sleep and spin).
+`responseCallback: http.expectedStatuses(401)` tells k6 that 401 is the right answer there,
+so it doesn't count as a failed request.
+-->
+
+---
+
+## Smoke test → load test: same script, different flags `⏱ 2 min`
+
+| What | Command |
+|---|---|
+| Smoke: 1 user, 10 s | `k6 run k6/smoke.js` (or `make smoke`) |
+| Load: 20 users, 30 s | `k6 run --vus 20 --duration 30s k6/smoke.js` (or `make load`) |
+| Ramp up, hold, ramp down | `k6 run --stage 30s:20 --stage 1m:20 --stage 30s:0 k6/smoke.js` |
+| Somewhere else | `k6 run -e BASE_URL=http://localhost:8080 k6/smoke.js` |
+| HTML report | `K6_WEB_DASHBOARD=true K6_WEB_DASHBOARD_EXPORT=report.html k6 run ...` |
+| No k6 installed | `docker run --rm -i -e BASE_URL=http://host.docker.internal:8000 grafana/k6 run - < k6/smoke.js` |
+
+Command-line flags override `options`; **the thresholds stay the same.** A load test is a smoke test
+with more users: the same journey, the same definition of "working", under pressure.
+
+On GitHub: **Actions → Python example load test (k6) → Run workflow**, type users and duration.
+It runs against a throwaway container and uploads `k6-load-test-report`.
+
+<!--
+Smoke = "does it work at all?" Load = "does it still work with N people at once?"
+Stress (find the breaking point) and soak (hours at normal load) are the same script with other flags.
+-->
+
+---
+
+## LIVE: the bug only load can find `⏱ 4 min`
+
+With the app running locally (`make run`):
 
 ```bash
-gh run download <run-id> --name python-example-project-image
-docker load -i image.tar.gz
-docker run --rm -p 8000:8000 python-example-project:<sha>
+make smoke          # 1 user:  ✓ all thresholds, 70 of 70 checks
+make load           # 20 users: ✗ checks 'rate>0.99' rate=98.15%   ✗ http_req_failed 'rate<0.01' rate=1.06%
 ```
 
----
+In the server's terminal:
 
-## LIVE: a green run `⏱ 2 min`
+```
+sqlite3.InterfaceError: bad parameter or other API misuse
+"POST /api/login HTTP/1.1" 500 -
+```
 
-On the **Actions** tab, open the latest run on `main`. Walk through it:
+`app/db.py` opens **one** SQLite connection, and Flask's server handles requests on **many threads**
+at once. Two threads using one connection at the same moment corrupt each other's query.
 
-1. **The graph:** three Python boxes, then E2E, then the image job. Click a box to see its steps.
-2. **A step's log:** expand "Unit tests" to see the same pytest output you get locally.
-3. **The summary:** scroll down to the coverage table and the image tag and size.
-4. **Artifacts:** the coverage report and the image, at the bottom of the summary.
-
-Then open any merged PR: the checks list at the bottom is the same run, seen from the PR.
+15 tests, coverage, a smoke test: all green. **None of them ever sent two requests at the same time.**
 
 <!--
-If there's no recent run on main, click "Run workflow" now; it takes about 3 minutes.
-Ask: how many machines did this run use? Five: three for the matrix, one for E2E, one for the image.
+Exact numbers vary run to run: it's a race. If a run comes up clean, use `--vus 50`.
+The fix is a lock (or a connection per request). Verified: wrap the two queries in
+`with _lock:` (a module-level threading.Lock), and 20 users for 30 s gives 0 of 4,088 checks failed.
+Don't fix it in class: leave it as exercise 1. It shows up again when we load-test the cluster.
 -->
 
 ---
 
-## LIVE: a red PR `⏱ 4 min`
+## Job 4: deploy `⏱ 3 min`
 
-Break the login rule in `app/auth_utils.py`, then open a PR:
+```yaml
+  deploy:
+    needs: docker-image
+    if: github.ref == 'refs/heads/main'
+    environment: production              # holds the secrets; only main may use it
+    steps:
+      - uses: actions/download-artifact@v4   # the exact image job 3 tested
+      - run: docker load -i image.tar.gz && docker tag "$LOCAL_IMAGE" "$IMAGE"
+      - uses: docker/login-action@v3
+        with: { username: dstrimble83, password: "${{ secrets.DOCKERHUB_TOKEN }}" }
+      - run: docker push "$IMAGE"                       # dstrimble83/python-example-project:<sha>
+      - name: Roll out the new image
+        run: |
+          kustomize edit set image "python-example-project=$IMAGE"
+          kubectl apply -k .
+          kubectl rollout status deployment/python-example --timeout=3m
+```
+
+- **Build once, ship that build.** No rebuilding from source on the way out.
+- **Tag with the commit SHA**, never `latest`: every running pod traces back to one commit.
+- **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else
+  (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
+
+---
+
+## Rolling update, the k6 gate, and rollback `⏱ 3 min`
+
+```yaml
+    strategy:
+      rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # one new pod at a time, never fewer ready
+    readinessProbe: { httpGet: { path: /, port: http } }   # no traffic until it serves the page
+```
+
+```yaml
+      - name: k6 smoke test against the cluster      # same script, now on the live pods
+        run: k6 run -e BASE_URL=http://localhost:8000 k6/smoke.js     # via kubectl port-forward
+      - name: Roll back
+        if: failure() && steps.rollout.outputs.applied == 'true'
+        run: kubectl rollout undo deployment/python-example
+```
+
+Three safety nets, in order:
+1. **Readiness probe:** a pod that can't serve never gets traffic, and the rollout stops waiting for it.
+2. **`rollout status --timeout`:** a rollout that never finishes fails the job.
+3. **k6 smoke on the live pods:** a rollout that "finished" but doesn't work fails the job.
+
+Any of them fails → **`rollout undo`** puts the previous ReplicaSet back.
+
+<!--
+The `applied == 'true'` guard matters: if the Docker push fails, nothing new was applied, and an undo
+would roll back a perfectly good release instead.
+-->
+
+---
+
+## LIVE: the deployed app, under load `⏱ 3 min`
+
+```bash
+kubectl -n python-example get deploy,pods
+kubectl -n python-example rollout history deployment/python-example
+kubectl -n python-example port-forward svc/python-example 8000:80     # leave running
+```
+
+In another terminal, the same script CI ran, then the same script as load:
+
+```bash
+k6 run k6/smoke.js                                  # what the deploy job just checked
+k6 run --vus 20 --duration 30s k6/smoke.js          # 20 users on the real pod
+kubectl -n python-example top pod                   # CPU and memory while it runs
+```
+
+Expected: the smoke run is green; the load run hits the same SQLite errors as on your laptop.
+The bug shipped. Every gate was green because no gate sends 20 users at once.
+
+<!--
+The Actions run for the latest merge shows the same thing from CI: the deploy job's summary prints
+the running image and the pod, and Settings → Environments → production lists every deploy.
+Ask: should the deploy job run a small load test instead of a smoke test? What would that cost,
+and what would it have caught today?
+-->
+
+---
+
+## LIVE: break a rollout on purpose `⏱ 2 min`
+
+With the port-forward from the last slide still running:
+
+```bash
+kubectl -n python-example set image deployment/python-example app=dstrimble83/python-example-project:does-not-exist
+kubectl -n python-example get pods                 # old pod Running, new pod ImagePullBackOff
+k6 run k6/smoke.js                                 # still green
+kubectl -n python-example rollout undo deployment/python-example
+```
+
+The new pod never became Ready, so the old one never stopped (`maxSurge: 1`, `maxUnavailable: 0`).
+Users saw nothing. In CI, `rollout status --timeout=3m` would have failed and the job would have run that `undo` itself.
+
+<!--
+If the port-forward drops during this, restart it: it was attached to the old pod, which is fine here
+because the old pod is the one that keeps running.
+-->
+
+---
+
+## Canary releases, without installing anything (optional) `⏱ 2 min`
+
+A **canary** sends a small share of real traffic to the new version first, and only continues if it's healthy.
+
+With nothing but a Service, the share is the pod ratio:
+
+```
+Service  (selector: app=python-example)
+ ├── Deployment python-example         3 pods  v1   → ~75% of requests
+ └── Deployment python-example-canary  1 pod   v2   → ~25% of requests   (same label)
+```
+
+Run k6 load, compare the canary's errors to the stable pods' errors, then scale the canary up or delete it.
+
+Tools like **Flagger** and **Argo Rollouts** automate exactly this: shift 10% → 20% → 50%, read error-rate
+and latency from Prometheus at each step, and roll back on their own. They need a traffic router
+(a service mesh or a smart ingress) and Prometheus, which is why this cluster doesn't run them yet.
+
+<!--
+Our pipeline is a "rolling update with a smoke gate": every pod gets the new version, but only after the
+previous one is Ready, and k6 decides at the end. A canary decides gradually, using real traffic.
+-->
+
+---
+
+## LIVE: a red PR `⏱ 3 min`
+
+Open draft PR #2: it breaks the login rule in `app/auth_utils.py`:
 
 ```python
     return len(creds["username"]) > 0 or len(creds["password"]) > 0   # was: and
 ```
 
 ```bash
-git switch -c demo/red-unit
-git commit -am "Demo: login only needs one field"
-git push -u origin demo/red-unit
-gh pr create --draft --fill
-gh pr checks --watch
+gh pr checks 2              # or: git switch -c ..., commit, push, gh pr create --draft --fill
 ```
 
-Expected on the PR:
-- All three **Unit and integration tests** jobs fail at the **Unit tests** step:
+Expected:
+- All three **Unit and integration tests** jobs fail at **Unit tests**:
   `FAILED tests/unit/test_auth_utils.py::TestHasLoginFields::test_true_only_when_both_fields_are_non_empty`
-- **End-to-end tests** and **Build and smoke-test** show as **skipped**
-- The merge box says **"Some checks were not successful"**
+- E2E, the image job, and deploy are **skipped**
+- The PR can't be merged: required checks failed (the ruleset on the next slide)
 
 <!--
 Reading a failure, in order: which job is red, which step is red, then the last 20 lines of that step's log.
-`gh run view --log-failed` prints only the failing step's log in the terminal.
-Optional aside: the integration tests (6 passed locally) would NOT have caught this. No integration test sends
-a body without a password. The unit test is the only layer guarding it. That's the coverage gap from last session.
-Fix: push the revert to the same branch, watch the checks go green, then close the PR without merging.
+`gh run view --log-failed` prints only the failing step's log.
+The integration tests would not have caught this: no integration test sends a body without a password.
 -->
 
 ---
 
-## LIVE: a bug only the pipeline sees `⏱ 4 min`
+## LIVE: a bug only the pipeline sees (optional) `⏱ 3 min`
 
-In `app/__main__.py`, change the address the server listens on:
-
-```python
-create_app().run(host="127.0.0.1", port=int(os.environ.get("PORT", 8000)))   # was "0.0.0.0"
-```
+Open draft PR #3: in `app/__main__.py`, the server listens on `127.0.0.1` instead of `0.0.0.0`.
 
 ```bash
 make test && make test-e2e          # locally: 12 passed, 3 passed. All green.
 ```
 
-Push it as a second PR (`demo/bad-bind`). Expected:
+Expected on the PR:
 - Fast tests: green. E2E: green. They run the server on the same machine, so `127.0.0.1` is fine.
-- **Build and smoke-test: red** at the smoke test step, after 30 seconds: `FAIL  server did not start on http://localhost:8000`
+- **Build and smoke-test: red** at "Wait for the container to answer", after about 20 seconds:
+  `curl: (56) Recv failure: Connection reset by peer`
 - "Show container logs" still runs and prints the clue: `Running on http://127.0.0.1:8000`
 
-Inside a container, `127.0.0.1` means **the container itself**. Requests forwarded from outside never reach it.
+Inside a container, `127.0.0.1` means **the container itself**. Requests from outside never reach it.
 
 <!--
-This is the "works on my machine" bug in its purest form. Every test passes, and the shipped artifact is unusable.
-It's also why the logs step is `if: always()`.
-To reproduce without GitHub: `make docker-build`, `docker run --rm -p 8000:8000 python-example-project`, `make smoke`.
-Fix: revert, push, green. Close the PR.
+The "works on my machine" bug in its purest form: every test passes, the shipped artifact is unusable.
+Had it reached the cluster, the readiness probe would have kept the new pods out of the Service,
+`rollout status` would have timed out, and the deploy job would have rolled back.
 -->
 
 ---
 
-## Make the checks matter: protect `main` `⏱ 2 min`
+## Make the checks matter: protect `main` `⏱ 1 min`
 
-A red X that people can merge anyway is just a suggestion. Make it a rule:
+**Settings → Rules → Rulesets → "Protect main"** (already set up on this repo):
+- Enforcement **Active**, target the **default branch**
+- **Require a pull request before merging**
+- **Require status checks to pass:** the three `Unit and integration tests (Python 3.x)` checks,
+  `End-to-end tests (Playwright)`, `Build and smoke-test the Docker image`
+- **Block force pushes** and **restrict deletions**
 
-**Settings → Rules → Rulesets → New ruleset → New branch ruleset**
-- Enforcement status: **Active** (a new ruleset is not enforced until you set this)
-- Target branches: **Include default branch** (`main`)
-- ✅ **Require a pull request before merging**
-- ✅ **Require status checks to pass**, then add:
-  - `Unit and integration tests (Python 3.12)`, `(Python 3.13)`, `(Python 3.14)`
-  - `End-to-end tests (Playwright)`
-  - `Build and smoke-test the Docker image`
-- Optionally: **Require branches to be up to date before merging**
-
-Now the merge button stays grey until every check is green.
+A red X that people can merge anyway is just a suggestion. Now it's a rule, and since merging deploys, it's also the release gate.
 
 <!--
-Check names only show up in the picker after they have run at least once, so do this after the first green run.
-Each matrix entry is its own check, so list all three.
-"Up to date" makes people merge main into their branch first, so the PR run tests what the merge will produce.
-That's slower but stricter. The push-to-main run is the safety net if you leave it off.
-This repo is public, so rulesets are available on a free account; private repos need a paid plan.
+Check names only appear in the picker after they've run once. Each matrix entry is its own check.
+Deploy is not a required check: it runs after the merge, so it can't block one.
+This repo is public, so rulesets work on a free account; private repos need a paid plan.
 -->
 
 ---
@@ -469,74 +591,37 @@ This repo is public, so rulesets are available on a free account; private repos 
 | `FileNotFoundError`, or a missing import | The file was never committed: check `git status` |
 | Same, but the file *is* committed | Case: macOS ignores `App.py` vs `app.py`; Linux doesn't |
 | Fails only on 3.12 | You used something newer than the oldest version you support |
-| Passes on re-run, fails sometimes | A flaky test: timing, ordering, or shared state |
-| Times out waiting for a server | It never started, or it's listening somewhere else (Demo 2) |
+| Passes on re-run, fails sometimes | A flaky test, or a race like the SQLite one |
+| k6 `http_req_failed` near 100% | The server isn't reachable at `BASE_URL` (Demo PR #3) |
+| Deploy: `Forbidden` from kubectl | The deployer's Role doesn't allow that verb or resource |
 
-To reproduce CI locally: fresh venv, `pip install -r requirements.txt`, then the same commands.
-Every step in the YAML matches a `make` target. CI just runs your Makefile on a fresh machine.
-
-<!--
-"Re-run failed jobs" is useful but dangerous: a test that passes on re-run is still flaky. Fix it or it will
-train everyone to ignore red.
--->
-
----
-
-## What deployment would add (optional) `⏱ 2 min`
-
-Not in our file yet. This is the shape of the job we'd add:
-
-```yaml
-  deploy:
-    needs: docker-image
-    if: github.ref == 'refs/heads/main'
-    environment: production          # can require a named person to click Approve
-    permissions:
-      packages: write                # to push to GitHub's container registry
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: python-example-project-image, path: python-example-project }
-      - run: docker load -i image.tar.gz
-      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - run: docker tag ... ghcr.io/<owner>/python-example-project:${{ github.sha }} && docker push ...
-      - run: ...                     # roll out: kubectl, a hosting platform's CLI, etc.
-```
-
-New ideas this would bring in: **secrets** (credentials the log never prints), **environments**
-(protection rules and approvals), and a **registry** (where servers pull images from).
-
-Before any of that is safe, this app needs real password hashing and a real session token (see the README).
-
-<!--
-Delivery vs deployment again: with `environment: production` requiring a reviewer, this is still continuous
-delivery, because a human approves. Remove the reviewer and it becomes continuous deployment.
--->
+To reproduce CI locally: fresh venv, `pip install -r requirements.txt`, then the same `make` targets.
 
 ---
 
 ## What to take away `⏱ 2 min`
 
-1. **CI is a rule, not a tool:** every change is tested automatically, on a clean machine,
-   before and after it reaches `main`.
-2. **Order the pipeline by cost.** Fast tests first, slow tests next, packaging last. `needs:` draws the arrows.
-3. **Test the artifact, not just the code.** The image job caught a bug that 15 green tests missed.
-4. **Delivery ≠ deployment.** We produce a release candidate on every merge. Shipping it is a separate decision.
-5. **A check only matters if it blocks the merge.** Protect `main`.
+1. **CI is a rule, not a tool:** every change is tested automatically, on a clean machine, before and after `main`.
+2. **Order the pipeline by cost and risk.** Fast tests, slow tests, package, deploy. `needs:` draws the arrows.
+3. **Test the artifact, then test it again where it runs.** Same k6 script on the container and on the cluster.
+4. **A smoke test with more users is a load test.** Load found a bug that every other test missed.
+5. **Deploy safely, not bravely:** readiness probes, rolling updates, a smoke gate, and an automatic undo.
+6. **A check only matters if it blocks the merge.** Protect `main`.
 
-For your team project: by the final presentation, every PR should have a green check on it.
-Be ready to show the workflow and name what it does *not* check.
+For your team project: every PR gets a green check, and you can show one k6 run and explain its thresholds.
 
 ---
 
 ## Exercises
 
-1. Add a **lint** job (`pip install ruff`, `ruff check .`) that runs alongside `fast-tests`, not before it.
-   Should `e2e-tests` need it?
-2. The README says "Python 3.12 or newer". Is that true, or just untested below 3.12?
-   Add `'3.11'` to the matrix and find out. Then decide: widen the promise or keep the matrix honest.
-3. Add `requests` to `requirements.txt` and `import requests` in `app/__init__.py`. Which jobs pass?
-   Which one fails, and why? Fix the Dockerfile so the image installs what the app needs and nothing else.
-4. Add a smoke check to `scripts/smoke_test.py` that logout clears the cookie.
-5. Set up the ruleset from the "protect `main`" slide on your team's repo, then try to merge a red PR.
-6. Write the `deploy` job's first half for real: push the image to `ghcr.io` on merges to `main`.
-   What permission did you have to add?
+1. Fix the SQLite race in `app/db.py` (a `threading.Lock`, or a connection per request).
+   Prove it with `make load` before and after. Which test could have caught it? Write one.
+2. The README says "Python 3.12 or newer". Add `'3.11'` to the matrix and find out if that's true.
+3. Add `requests` to `requirements.txt` and `import requests` in `app/__init__.py`. Which job fails, and why?
+   Fix the Dockerfile so the image installs what the app needs and nothing else.
+4. Add a check to `k6/smoke.js` that logout clears the cookie. Then add a stricter threshold
+   and find the number of users where it starts failing.
+5. Replace the Flask dev server in the Dockerfile with `gunicorn` (4 workers). Run the same
+   load test from the Actions tab before and after. Compare p95 and the error count.
+6. Build the canary from the optional slide by hand: copy the Deployment as `python-example-canary`
+   with one replica and a new image, run k6 in the cluster, and count which pods served the errors.

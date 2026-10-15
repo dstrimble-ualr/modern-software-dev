@@ -1,0 +1,72 @@
+name: Python example load test (k6)
+
+# Run k6/smoke.js as a load test, on demand, from the Actions tab ("Run workflow").
+# Same script as the smoke test; only the number of users and the duration change.
+# It targets a throwaway container on the runner, never the cluster, so it is safe
+# to run as often as you like.
+
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: Virtual users (how many at once)
+        required: true
+        default: '20'
+      duration:
+        description: How long (e.g. 30s, 2m)
+        required: true
+        default: '30s'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: python-example-project
+
+jobs:
+  load-test:
+    name: k6 load test (${{ inputs.vus }} VUs for ${{ inputs.duration }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the app
+        run: |
+          docker build -t python-example-project .
+          docker run -d --name app -p 8000:8000 python-example-project
+          curl --silent --show-error --fail --output /dev/null --retry 20 --retry-delay 1 --retry-all-errors http://localhost:8000/
+
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: '2.3.0'
+
+      # Inputs go through env, not straight into the script, so a crafted input
+      # can't inject shell commands.
+      - name: k6 load test
+        env:
+          VUS: ${{ inputs.vus }}
+          DURATION: ${{ inputs.duration }}
+          K6_WEB_DASHBOARD: 'true'
+          K6_WEB_DASHBOARD_EXPORT: k6-report.html
+        run: k6 run -e BASE_URL=http://localhost:8000 --vus "$VUS" --duration "$DURATION" k6/smoke.js
+
+      - name: Server errors during the test
+        if: always()
+        run: |
+          {
+            echo "### Server side"
+            echo ""
+            echo "Responses with status 500: **$(docker logs app 2>&1 | grep -c '" 500 ' || true)**"
+            echo ""
+            echo '```'
+            docker logs app 2>&1 | grep -E '^[A-Za-z]+Error|^sqlite3\.' | sort | uniq -c | sort -rn | head -10 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the k6 HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-load-test-report
+          path: python-example-project/k6-report.html

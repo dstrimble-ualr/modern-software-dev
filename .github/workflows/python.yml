@@ -1,9 +1,10 @@
 name: Python example (python-example-project)
 
 # CI/CD pipeline for python-example-project:
-#   fast-tests (3 Python versions) ──► e2e-tests ──► docker-image
-# Nothing is deployed yet. On main, the tested image is saved as a downloadable
-# artifact: the "release candidate" a deploy job would pick up later.
+#   fast-tests (3 Python versions) ──► e2e-tests ──► docker-image ──► deploy (main only)
+# The image job smoke-tests the container with k6. On main, the deploy job pushes that
+# exact image to Docker Hub, rolls it out to the Linode cluster, smoke-tests the live
+# pods with the same k6 script, and rolls back automatically if anything fails.
 
 on:
   push:
@@ -16,7 +17,7 @@ on:
 # would leave PRs that skip it stuck on "Expected - Waiting for status to be reported".
 
 # A new commit on a PR cancels that PR's older, now-stale run. Runs on main are never
-# cancelled, so every merge gets its own result.
+# cancelled, so every merge gets its own result (and deploys happen one at a time).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -27,6 +28,9 @@ permissions:
 defaults:
   run:
     working-directory: python-example-project
+
+env:
+  K6_VERSION: '2.3.0'
 
 jobs:
   fast-tests:
@@ -112,9 +116,16 @@ jobs:
       - name: Start a container from the image
         run: docker run -d --name app -p 8000:8000 "$IMAGE"
 
+      - name: Wait for the container to answer
+        run: curl --silent --show-error --fail --output /dev/null --retry 20 --retry-delay 1 --retry-all-errors http://localhost:8000/
+
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ env.K6_VERSION }}
+
       # The tests above ran the code from a checkout. This checks the image we would ship.
-      - name: Smoke test the running container
-        run: python3 scripts/smoke_test.py http://localhost:8000
+      - name: k6 smoke test against the container
+        run: k6 run -e BASE_URL=http://localhost:8000 k6/smoke.js
 
       - name: Show container logs
         if: always()
@@ -128,8 +139,7 @@ jobs:
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| \`$IMAGE\` | $(docker image inspect "$IMAGE" --format '{{.Size}}' | numfmt --to=iec) |" >> "$GITHUB_STEP_SUMMARY"
 
-      # Delivery, not deployment: keep the tested image so a later deploy step (or a
-      # person) can ship exactly this build. Only for main, and only for a week.
+      # Build once, ship that build: the deploy job pushes these exact bytes.
       - name: Save the image as a release candidate
         if: github.ref == 'refs/heads/main'
         run: docker save "$IMAGE" | gzip > image.tar.gz
@@ -142,6 +152,88 @@ jobs:
           path: python-example-project/image.tar.gz
           retention-days: 7
 
-  # Next step, not built yet: a `deploy` job with `needs: docker-image`,
-  # `if: github.ref == 'refs/heads/main'`, and `environment: production`, which would
-  # push the image to a registry and roll it out. See CICD_PRESENTATION.md.
+  deploy:
+    name: Deploy to Linode (rolling update + k6 smoke test)
+    runs-on: ubuntu-latest
+    needs: docker-image
+    if: github.ref == 'refs/heads/main'
+    # Secrets DOCKERHUB_TOKEN and KUBECONFIG live on this environment, which only
+    # main can use. Each deploy shows up under the repo's "Deployments".
+    environment: production
+    env:
+      LOCAL_IMAGE: python-example-project:${{ github.sha }}
+      IMAGE: dstrimble83/python-example-project:${{ github.sha }}
+      NAMESPACE: python-example
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-example-project-image
+          path: python-example-project
+
+      - name: Load the tested image
+        run: |
+          docker load -i image.tar.gz
+          docker tag "$LOCAL_IMAGE" "$IMAGE"
+
+      - uses: docker/login-action@v3
+        with:
+          username: dstrimble83
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push to Docker Hub
+        run: docker push "$IMAGE"
+
+      - name: Connect to the cluster
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          printf '%s' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Roll out the new image
+        id: rollout
+        working-directory: python-example-project/k8s/app
+        run: |
+          kustomize edit set image "python-example-project=$IMAGE"
+          kubectl apply -k .
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+          kubectl -n "$NAMESPACE" rollout status deployment/python-example --timeout=3m
+
+      - name: Port-forward to the service
+        run: |
+          kubectl -n "$NAMESPACE" port-forward service/python-example 8000:80 > "$RUNNER_TEMP/port-forward.log" 2>&1 &
+          curl --silent --show-error --fail --output /dev/null --retry 20 --retry-delay 1 --retry-all-errors http://localhost:8000/
+
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ env.K6_VERSION }}
+
+      # Same script as the container check, now against the live pods.
+      - name: k6 smoke test against the cluster
+        run: k6 run -e BASE_URL=http://localhost:8000 k6/smoke.js
+
+      # Runs only if the new version was applied and then something failed: the
+      # rollout itself, the port-forward, or the k6 thresholds.
+      - name: Roll back
+        if: failure() && steps.rollout.outputs.applied == 'true'
+        run: |
+          kubectl -n "$NAMESPACE" rollout undo deployment/python-example
+          kubectl -n "$NAMESPACE" rollout status deployment/python-example --timeout=3m
+
+      - name: Add the deploy to the job summary
+        if: always() && steps.rollout.outputs.applied == 'true'
+        run: |
+          {
+            echo "### Deploy"
+            echo ""
+            echo "Requested image: \`$IMAGE\`"
+            echo ""
+            echo "Running image: \`$(kubectl -n "$NAMESPACE" get deployment python-example -o jsonpath='{.spec.template.spec.containers[0].image}')\`"
+            echo ""
+            echo '```'
+            kubectl -n "$NAMESPACE" get deployment/python-example 2>&1 || true
+            kubectl -n "$NAMESPACE" get pods -l app=python-example 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
