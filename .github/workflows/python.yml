@@ -1,12 +1,28 @@
 name: Python example (python-example-project)
 
+# CI/CD pipeline for python-example-project:
+#   fast-tests (3 Python versions) ──► e2e-tests ──► docker-image
+# Nothing is deployed yet. On main, the tested image is saved as a downloadable
+# artifact: the "release candidate" a deploy job would pick up later.
+
 on:
   push:
-    branches: [ "**" ]
-    paths: [ "python-example-project/**", ".github/workflows/python.yml" ]
+    branches: [ main ]     # every merge (or direct push) to main
   pull_request:
-    branches: [ main ]
-    paths: [ "python-example-project/**", ".github/workflows/python.yml" ]
+    branches: [ main ]     # every PR aimed at main, re-run on each new commit
+  workflow_dispatch:       # adds a "Run workflow" button on the Actions tab
+
+# No `paths:` filter on purpose: if this workflow becomes a required check, a filter
+# would leave PRs that skip it stuck on "Expected - Waiting for status to be reported".
+
+# A new commit on a PR cancels that PR's older, now-stale run. Runs on main are never
+# cancelled, so every merge gets its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -14,14 +30,18 @@ defaults:
 
 jobs:
   fast-tests:
-    name: Unit and integration tests (pytest)
+    name: Unit and integration tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false     # finish every version so we see which ones break
+      matrix:
+        python-version: [ '3.12', '3.13', '3.14' ]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: python-example-project/requirements.txt
 
@@ -33,13 +53,17 @@ jobs:
       - name: Integration tests
         run: pytest tests/integration
 
+      # Coverage is the same on every version, so measure it once.
       - name: Coverage (unit + integration)
+        if: matrix.python-version == '3.12'
         run: pytest --cov --cov-report=term-missing --cov-report=html --cov-report=json
 
       - name: Add coverage table to the job summary
+        if: matrix.python-version == '3.12'
         run: python scripts/coverage_summary.py >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload HTML coverage report
+        if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
         with:
           name: python-coverage-report
@@ -72,3 +96,52 @@ jobs:
         with:
           name: python-playwright-results
           path: python-example-project/test-results/
+
+  docker-image:
+    name: Build and smoke-test the Docker image
+    runs-on: ubuntu-latest
+    needs: e2e-tests    # only package code that passed every test layer
+    env:
+      IMAGE: python-example-project:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t "$IMAGE" .
+
+      - name: Start a container from the image
+        run: docker run -d --name app -p 8000:8000 "$IMAGE"
+
+      # The tests above ran the code from a checkout. This checks the image we would ship.
+      - name: Smoke test the running container
+        run: python3 scripts/smoke_test.py http://localhost:8000
+
+      - name: Show container logs
+        if: always()
+        run: docker logs app
+
+      - name: Add image details to the job summary
+        run: |
+          echo "### Docker image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tag | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`$IMAGE\` | $(docker image inspect "$IMAGE" --format '{{.Size}}' | numfmt --to=iec) |" >> "$GITHUB_STEP_SUMMARY"
+
+      # Delivery, not deployment: keep the tested image so a later deploy step (or a
+      # person) can ship exactly this build. Only for main, and only for a week.
+      - name: Save the image as a release candidate
+        if: github.ref == 'refs/heads/main'
+        run: docker save "$IMAGE" | gzip > image.tar.gz
+
+      - name: Upload the release candidate
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-example-project-image
+          path: python-example-project/image.tar.gz
+          retention-days: 7
+
+  # Next step, not built yet: a `deploy` job with `needs: docker-image`,
+  # `if: github.ref == 'refs/heads/main'`, and `environment: production`, which would
+  # push the image to a registry and roll it out. See CICD_PRESENTATION.md.

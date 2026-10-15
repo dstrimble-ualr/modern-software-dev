@@ -9,5 +9,7 @@ class playbook of break/fix demos, and a 45-minute presentation deck.
 | [dstrimble-example-project/](dstrimble-example-project/) | Node.js, Express, Jest, supertest, Playwright | [README](dstrimble-example-project/README.md), [Playbook](dstrimble-example-project/TESTING_PLAYBOOK.md), [Deck](dstrimble-example-project/TESTING_PRESENTATION.md) |
 | [python-example-project/](python-example-project/) | Python, Flask, pytest, pytest-cov, Playwright | [README](python-example-project/README.md), [Playbook](python-example-project/TESTING_PLAYBOOK.md), [Deck](python-example-project/TESTING_PRESENTATION.md) |
 
-Each project is self-contained: `cd` into it and follow its README. CI runs each project's
-tests from `.github/workflows/` whenever files under that project change.
+Each project is self-contained: `cd` into it and follow its README. CI runs from `.github/workflows/`:
+`node.yml` whenever files under the Node project change, and `python.yml`, a full CI/CD pipeline
+(tests, then a Docker build and smoke test), on every pull request and merge to `main`. The Python
+project also has a [CI/CD deck](python-example-project/CICD_PRESENTATION.md).

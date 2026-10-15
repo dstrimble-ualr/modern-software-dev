@@ -15,3 +15,6 @@ htmlcov/
 
 # Playwright output
 test-results/
+
+# Saved Docker image (CI release candidate)
+image.tar.gz

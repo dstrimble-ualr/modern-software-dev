@@ -55,9 +55,26 @@ what each layer proves and includes verified break/fix demos.
 ## Docker
 
 ```bash
-docker build -t python-example-project .
+docker build -t python-example-project .           # or: make docker-build
 docker run --rm -p 8000:8000 python-example-project
+make smoke                                          # in a second terminal: smoke-test the container
 ```
+
+## CI/CD
+
+GitHub Actions runs [`../.github/workflows/python.yml`](../.github/workflows/python.yml)
+on every pull request to `main`, every merge to `main`, and on demand from the Actions tab:
+
+```
+fast-tests (Python 3.12, 3.13, 3.14) ──► e2e-tests ──► docker-image
+unit, integration, coverage              Playwright      build, smoke test,
+                                                         save image (main only)
+```
+
+Each job runs only if the one before it passed. Nothing is deployed yet: on `main`, the tested
+image is uploaded as the `python-example-project-image` artifact (kept 7 days).
+
+See [CICD_PRESENTATION.md](CICD_PRESENTATION.md) for the class deck.
 
 ## Security notes
 
