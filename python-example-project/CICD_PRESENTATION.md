@@ -406,7 +406,7 @@ Don't fix it in class: leave it as exercise 1. It shows up again when we load-te
 - **Build once, ship that build.** No rebuilding from source on the way out.
 - **Tag with the commit SHA**, never `latest`: every running pod traces back to one commit.
 - **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else
-  (`k8s/bootstrap/deployer.yaml`). If the secret leaked, the damage stops at this app.
+  (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
 
 ---
 
