@@ -1,6 +1,7 @@
 # The identity GitHub Actions uses to deploy. It can manage the app in this one
 # namespace and nothing else: no other namespaces, no cluster-wide objects.
 # Apply once, as a cluster admin: kubectl apply -f k8s/bootstrap/
+# (Files apply in name order, so 00-namespace.yaml creates the namespace first.)
 apiVersion: v1
 kind: ServiceAccount
 metadata:

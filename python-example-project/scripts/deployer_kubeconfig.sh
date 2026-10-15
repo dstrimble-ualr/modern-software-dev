@@ -6,10 +6,18 @@
 # into the GitHub secret so the token never lands on disk:
 #
 #   scripts/deployer_kubeconfig.sh | gh secret set KUBECONFIG --env production
+#
+# A pipe sends whatever came out even if this script fails, so if it prints an error,
+# fix that and run the whole line again.
 set -euo pipefail
 
 NAMESPACE=python-example
 SECRET=github-deployer-token
+
+if ! kubectl -n "$NAMESPACE" get secret "$SECRET" > /dev/null 2>&1; then
+  echo "No $NAMESPACE/$SECRET secret. Run 'kubectl apply -f k8s/bootstrap/' first." >&2
+  exit 1
+fi
 
 server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
 ca=$(kubectl -n "$NAMESPACE" get secret "$SECRET" -o jsonpath='{.data.ca\.crt}')
