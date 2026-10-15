@@ -5,14 +5,13 @@ metadata:
   labels:
     app: python-example
 spec:
-  # No `replicas:` here. hpa.yaml owns the pod count; setting it here too would
-  # reset it to this number on every deploy.
+  replicas: 1                       # one pod: the cluster is shared and short on memory
   revisionHistoryLimit: 5           # how far back `kubectl rollout undo` can go
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1                   # start one new pod at a time...
-      maxUnavailable: 0             # ...and never drop below the current ready count
+      maxSurge: 1                   # start the new pod first...
+      maxUnavailable: 0             # ...and stop the old one only once the new one is ready
   selector:
     matchLabels:
       app: python-example
@@ -41,8 +40,6 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 20
           # Measured: ~22 MiB idle and under load; ~90m CPU at 20 virtual users.
-          # The HPA scales on CPU *as a percentage of this request*. Keep memory
-          # small: the cluster is shared and short on memory.
           resources:
             requests:
               cpu: 25m

@@ -10,9 +10,9 @@ paginate: true
 30–45 minutes. One pipeline, one k6 script used two ways, one cluster.
 
 <!--
-Timing budget is in each slide title. The core slides sum to 42 minutes. Slides marked (optional)
-add 12 more: skip them for a 45-minute slot. For about 30 minutes, also skip "LIVE: a red PR" and run
-the autoscaling demo for 2 minutes instead of 4.
+Timing budget is in each slide title. The core slides sum to 41 minutes. Slides marked (optional)
+add 12 more: skip them for a 45-minute slot. For about 35 minutes, also skip "LIVE: a red PR" and
+"LIVE: break a rollout on purpose".
 
 Before class:
   1. Actions tab: the latest run on main is green, including "Deploy to Linode".
@@ -33,8 +33,8 @@ Follows TESTING_PRESENTATION.md: students should already know the three test lay
 | 0–9 | Why CI/CD, the three terms, the pipeline, the vocabulary |
 | 9–16 | Triggers and the test jobs |
 | 16–24 | k6: a smoke test, the same script as a load test, and the bug only load finds |
-| 24–36 | Deploying: rolling updates, the k6 gate, rollback, autoscaling |
-| 36–42 | A red PR, protecting `main`, wrap-up |
+| 24–35 | Deploying: rolling updates, the k6 gate, rollback, load on the real cluster |
+| 35–41 | A red PR, protecting `main`, wrap-up |
 
 By the end you should be able to open `.github/workflows/python.yml`, say what runs when,
 explain why a PR got a red X, and run a load test against the cluster.
@@ -378,7 +378,7 @@ at once. Two threads using one connection at the same moment corrupt each other'
 Exact numbers vary run to run: it's a race. If a run comes up clean, use `--vus 50`.
 The fix is a lock (or a connection per request). Verified: wrap the two queries in
 `with _lock:` (a module-level threading.Lock), and 20 users for 30 s gives 0 of 4,088 checks failed.
-Don't fix it in class: leave it as exercise 1, and leave it broken for the autoscaling demo.
+Don't fix it in class: leave it as exercise 1. It shows up again when we load-test the cluster.
 -->
 
 ---
@@ -440,57 +440,51 @@ would roll back a perfectly good release instead.
 
 ---
 
-## LIVE: look at the deploy `⏱ 2 min`
+## LIVE: the deployed app, under load `⏱ 3 min`
 
 ```bash
-kubectl -n python-example get deploy,hpa,pods
+kubectl -n python-example get deploy,pods
 kubectl -n python-example rollout history deployment/python-example
 kubectl -n python-example port-forward svc/python-example 8000:80     # leave running
-k6 run k6/smoke.js                                                    # in another terminal
 ```
 
-Then break a rollout by hand and watch the safety net hold:
+In another terminal, the same script CI ran, then the same script as load:
 
 ```bash
-kubectl -n python-example set image deployment/python-example app=dstrimble83/python-example-project:does-not-exist
-kubectl -n python-example get pods        # 2 old pods Running, 1 new pod ImagePullBackOff
-kubectl -n python-example rollout undo deployment/python-example
+k6 run k6/smoke.js                                  # what the deploy job just checked
+k6 run --vus 20 --duration 30s k6/smoke.js          # 20 users on the real pod
+kubectl -n python-example top pod                   # CPU and memory while it runs
 ```
 
-`maxUnavailable: 0` means the old pods never stopped serving while the new one failed.
+Expected: the smoke run is green; the load run hits the same SQLite errors as on your laptop.
+The bug shipped. Every gate was green because no gate sends 20 users at once.
 
 <!--
-The Actions run for the latest merge also shows this: the job summary prints the running image and the pods,
-and Settings → Environments → production lists every deploy.
+The Actions run for the latest merge shows the same thing from CI: the deploy job's summary prints
+the running image and the pod, and Settings → Environments → production lists every deploy.
+Ask: should the deploy job run a small load test instead of a smoke test? What would that cost,
+and what would it have caught today?
 -->
 
 ---
 
-## LIVE: autoscaling under load `⏱ 4 min`
+## LIVE: break a rollout on purpose `⏱ 2 min`
 
-`k8s/app/hpa.yaml`: keep average CPU near **50% of the 25m request**, between **2 and 5 pods**.
+With the port-forward from the last slide still running:
 
-Terminal 1, watch:
 ```bash
-kubectl -n python-example get hpa,pods -w
+kubectl -n python-example set image deployment/python-example app=dstrimble83/python-example-project:does-not-exist
+kubectl -n python-example get pods                 # old pod Running, new pod ImagePullBackOff
+k6 run k6/smoke.js                                 # still green
+kubectl -n python-example rollout undo deployment/python-example
 ```
 
-Terminal 2, run the k6 script **inside the cluster**, through the Service:
-```bash
-kubectl -n python-example run k6 --rm -i --restart=Never --image=grafana/k6:2.3.0 -- \
-  run --vus 30 --duration 3m -e BASE_URL=http://python-example - < k6/smoke.js
-```
-
-Expected: CPU climbs past 50%, the HPA goes **2 → 5 pods** within a minute or so, new pods turn Ready
-and start taking traffic. A minute after the load stops, it scales back to 2.
+The new pod never became Ready, so the old one never stopped (`maxSurge: 1`, `maxUnavailable: 0`).
+Users saw nothing. In CI, `rollout status --timeout=3m` would have failed and the job would have run that `undo` itself.
 
 <!--
-Why inside the cluster? `kubectl port-forward` pins to ONE pod, so new pods would never see the load.
-A pod talking to the Service gets spread across all of them.
-Ask: did the SQLite errors go away with more pods? Fewer requests per pod means fewer collisions,
-so the error rate usually drops. Scaling hid the bug a little. It did not fix it.
-The cluster is shared and short on memory: 5 pods x 32Mi is the most this adds. If a pod sits Pending,
-the node pool's autoscaler adds a node; that's the other kind of autoscaling.
+If the port-forward drops during this, restart it: it was attached to the old pod, which is fine here
+because the old pod is the one that keeps running.
 -->
 
 ---

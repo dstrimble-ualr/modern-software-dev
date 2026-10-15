@@ -233,7 +233,7 @@ jobs:
             echo "Running image: \`$(kubectl -n "$NAMESPACE" get deployment python-example -o jsonpath='{.spec.template.spec.containers[0].image}')\`"
             echo ""
             echo '```'
-            kubectl -n "$NAMESPACE" get deployment/python-example hpa/python-example 2>&1 || true
+            kubectl -n "$NAMESPACE" get deployment/python-example 2>&1 || true
             kubectl -n "$NAMESPACE" get pods -l app=python-example 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

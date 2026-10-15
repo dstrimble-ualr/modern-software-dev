@@ -6,7 +6,6 @@ namespace: python-example
 resources:
   - deployment.yaml
   - service.yaml
-  - hpa.yaml
 images:
   - name: python-example-project
     newName: dstrimble83/python-example-project

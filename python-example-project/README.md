@@ -96,12 +96,11 @@ test on demand ("Run workflow", choose users and duration) and uploads k6's HTML
 
 ## Kubernetes
 
-The app runs in the `python-example` namespace on the class Linode cluster: a Deployment
-(rolling updates, readiness probe), a ClusterIP Service, and a HorizontalPodAutoscaler (2 to 5 pods on CPU).
-Manifests are in [`k8s/app/`](k8s/app/); CI applies them with `kubectl apply -k`.
+The app runs in the `python-example` namespace on the class Linode cluster: a one-pod Deployment
+(rolling updates, readiness probe) and a ClusterIP Service. Manifests are in [`k8s/app/`](k8s/app/); CI applies them with `kubectl apply -k`.
 
 ```bash
-kubectl -n python-example get deploy,hpa,pods
+kubectl -n python-example get deploy,pods
 kubectl -n python-example port-forward svc/python-example 8000:80   # then open http://localhost:8000
 kubectl -n python-example rollout history deployment/python-example
 kubectl -n python-example rollout undo deployment/python-example
