@@ -102,7 +102,7 @@ Plus a separate button, **Python example load test (k6)**: the same k6 script, a
 
 <!--
 On a PR, the first three run and deploy shows as skipped. On main, all four run.
-Show the real job times on the Actions tab: roughly 15 s, 35 s, 20 s, and about a minute for the deploy.
+Show the real job times on the Actions tab. On the first deploy: 12–22 s, 36 s, 30 s, and 53 s for the deploy.
 -->
 
 ---
@@ -453,15 +453,23 @@ In another terminal, the same script CI ran, then the same script as load:
 ```bash
 k6 run k6/smoke.js                                  # what the deploy job just checked
 k6 run --vus 20 --duration 30s k6/smoke.js          # 20 users on the real pod
-kubectl -n python-example top pod                   # CPU and memory while it runs
+kubectl -n python-example logs deploy/python-example | grep sqlite3
 ```
 
-Expected: the smoke run is green; the load run hits the same SQLite errors as on your laptop.
+Expected (measured on this cluster):
+- Smoke: **green**, p95 about 180 ms
+- Load: **all three thresholds red**: checks 98.2%, failed requests 1.2%, p95 **914 ms**
+- Logs: `sqlite3.InterfaceError: bad parameter or other API misuse`
+
 The bug shipped. Every gate was green because no gate sends 20 users at once.
 
 <!--
-The Actions run for the latest merge shows the same thing from CI: the deploy job's summary prints
-the running image and the pod, and Settings → Environments → production lists every deploy.
+Why is latency red here when it was ~15 ms on your laptop? Every request goes through the port-forward:
+laptop → Kubernetes API server → node → pod. That tunnel adds ~130 ms and queues under load. Lesson:
+measure from where your users are, and know what's between k6 and the app before you trust a latency number.
+The errors, though, are the app's: the same SQLite race as locally.
+The deploy job's summary on the Actions run shows the running image and the pod, and
+Settings → Environments → production lists every deploy.
 Ask: should the deploy job run a small load test instead of a smoke test? What would that cost,
 and what would it have caught today?
 -->
@@ -475,7 +483,8 @@ With the port-forward from the last slide still running:
 ```bash
 kubectl -n python-example set image deployment/python-example app=dstrimble83/python-example-project:does-not-exist
 kubectl -n python-example get pods                 # old pod Running, new pod ImagePullBackOff
-k6 run k6/smoke.js                                 # still green
+k6 run k6/smoke.js                                 # still green: 100% of checks
+kubectl -n python-example rollout status deployment/python-example --timeout=5s   # "timed out": what CI would see
 kubectl -n python-example rollout undo deployment/python-example
 ```
 
@@ -483,8 +492,9 @@ The new pod never became Ready, so the old one never stopped (`maxSurge: 1`, `ma
 Users saw nothing. In CI, `rollout status --timeout=3m` would have failed and the job would have run that `undo` itself.
 
 <!--
-If the port-forward drops during this, restart it: it was attached to the old pod, which is fine here
-because the old pod is the one that keeps running.
+Verified on the cluster: the port-forward stays up throughout, because it's attached to the old pod,
+which is the one that keeps running. After the undo, the bad pod goes Terminating and the image is back
+to the last merged commit's SHA.
 -->
 
 ---
