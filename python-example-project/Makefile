@@ -1,7 +1,7 @@
 # Test commands. Each target is one plain command; run it directly if you
 # prefer (or are on Windows without make).
 
-.PHONY: run test test-unit test-integration test-e2e test-all coverage coverage-unit coverage-integration coverage-summary
+.PHONY: run test test-unit test-integration test-e2e test-all coverage coverage-unit coverage-integration coverage-summary docker-build smoke
 
 run:
 	python -m app
@@ -31,3 +31,9 @@ coverage-integration:
 
 coverage-summary:        ## reprint the last `make coverage` run as a Markdown table with raw counts
 	python scripts/coverage_summary.py
+
+docker-build:            ## build the same image CI builds
+	docker build -t python-example-project .
+
+smoke:                   ## smoke-test a running server (start it first: `make run` or `docker run`)
+	python scripts/smoke_test.py

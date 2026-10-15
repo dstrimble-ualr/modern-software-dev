@@ -527,7 +527,7 @@ bug, but it would trust your mock to behave like the real server. E2E trusts not
 
 ## How this runs in CI `⏱ 1 min`
 
-`.github/workflows/ci.yml`, two jobs:
+`.github/workflows/python.yml` (repo root), first two jobs:
 
 ```
 fast-tests  (pytest)              e2e-tests  (Playwright)
@@ -539,6 +539,7 @@ fast-tests  (pytest)              e2e-tests  (Playwright)
 ```
 
 The slow job only runs if the fast job passes. Same pyramid, drawn in YAML.
+A third job builds and smoke-tests the Docker image; `CICD_PRESENTATION.md` covers the whole pipeline.
 
 ---
 
