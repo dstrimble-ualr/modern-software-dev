@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print a kubeconfig for the github-deployer service account (k8s/bootstrap/deployer.yaml).
+# Print a kubeconfig for the github-deployer service account (k8s/bootstrap/10-deployer.yaml).
 # It can only manage the app in the python-example namespace.
 #
 # Run as a cluster admin, after `kubectl apply -f k8s/bootstrap/`, and pipe it straight
