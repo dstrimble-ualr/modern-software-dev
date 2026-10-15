@@ -1,7 +1,7 @@
 # Test commands. Each target is one plain command; run it directly if you
 # prefer (or are on Windows without make).
 
-.PHONY: run test test-unit test-integration test-e2e test-all coverage coverage-unit coverage-integration coverage-summary docker-build smoke
+.PHONY: run test test-unit test-integration test-e2e test-all coverage coverage-unit coverage-integration coverage-summary docker-build smoke load
 
 run:
 	python -m app
@@ -35,5 +35,8 @@ coverage-summary:        ## reprint the last `make coverage` run as a Markdown t
 docker-build:            ## build the same image CI builds
 	docker build -t python-example-project .
 
-smoke:                   ## smoke-test a running server (start it first: `make run` or `docker run`)
-	python scripts/smoke_test.py
+smoke:                   ## k6 smoke test: 1 user, 10 s, against a running server (`make run` or `docker run` first)
+	k6 run k6/smoke.js
+
+load:                    ## the same k6 script as a load test: 20 users for 30 s
+	k6 run --vus 20 --duration 30s k6/smoke.js

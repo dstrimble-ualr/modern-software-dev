@@ -11,5 +11,6 @@ class playbook of break/fix demos, and a 45-minute presentation deck.
 
 Each project is self-contained: `cd` into it and follow its README. CI runs from `.github/workflows/`:
 `node.yml` whenever files under the Node project change, and `python.yml`, a full CI/CD pipeline
-(tests, then a Docker build and smoke test), on every pull request and merge to `main`. The Python
-project also has a [CI/CD deck](python-example-project/CICD_PRESENTATION.md).
+(tests, a Docker build with a k6 smoke test, then a deploy to the class Kubernetes cluster from `main`),
+on every pull request and merge to `main`. The Python project also has a
+[CI/CD deck](python-example-project/CICD_PRESENTATION.md).
