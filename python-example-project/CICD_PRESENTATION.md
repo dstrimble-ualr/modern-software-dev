@@ -1,6 +1,12 @@
 ---
 marp: true
 paginate: true
+style: |
+  section { font-size: 23px; padding: 48px 64px 56px; }
+  section h2 { margin-bottom: 0.4em; }
+  section table { font-size: 0.92em; }
+  section td, section th { padding: 4px 12px; }
+  section pre { font-size: 0.82em; }
 ---
 
 # CI/CD with GitHub Actions, k6, and Kubernetes
@@ -405,8 +411,7 @@ Don't fix it in class: leave it as exercise 1. It shows up again when we load-te
 
 - **Build once, ship that build.** No rebuilding from source on the way out.
 - **Tag with the commit SHA**, never `latest`: every running pod traces back to one commit.
-- **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else
-  (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
+- **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
 
 ---
 
@@ -635,3 +640,5 @@ For your team project: every PR gets a green check, and you can show one k6 run 
    load test from the Actions tab before and after. Compare p95 and the error count.
 6. Build the canary from the optional slide by hand: copy the Deployment as `python-example-canary`
    with one replica and a new image, run k6 in the cluster, and count which pods served the errors.
+
+More, from easy to hard, with no cluster needed: [CICD_EXERCISES.md](CICD_EXERCISES.md).

@@ -21,3 +21,8 @@ image.tar.gz
 
 # k6 HTML report (K6_WEB_DASHBOARD_EXPORT)
 k6-report.html
+
+# k6 reports students write in CICD_EXERCISES.md (2.10)
+report.html
+summary.json
+summary.md
