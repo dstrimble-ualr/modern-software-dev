@@ -1,6 +1,12 @@
 ---
 marp: true
 paginate: true
+style: |
+  section { font-size: 23px; padding: 48px 64px 56px; }
+  section h2 { margin-bottom: 0.4em; }
+  section table { font-size: 0.92em; }
+  section td, section th { padding: 4px 12px; }
+  section pre { font-size: 0.82em; }
 ---
 
 # CI/CD with GitHub Actions, k6, and Kubernetes
@@ -405,8 +411,7 @@ Don't fix it in class: leave it as exercise 1. It shows up again when we load-te
 
 - **Build once, ship that build.** No rebuilding from source on the way out.
 - **Tag with the commit SHA**, never `latest`: every running pod traces back to one commit.
-- **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else
-  (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
+- **`KUBECONFIG` belongs to `github-deployer`**, a service account that can touch one namespace and nothing else (`k8s/bootstrap/10-deployer.yaml`). If the secret leaked, the damage stops at this app.
 
 ---
 
