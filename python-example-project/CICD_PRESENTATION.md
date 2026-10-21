@@ -635,3 +635,5 @@ For your team project: every PR gets a green check, and you can show one k6 run 
    load test from the Actions tab before and after. Compare p95 and the error count.
 6. Build the canary from the optional slide by hand: copy the Deployment as `python-example-canary`
    with one replica and a new image, run k6 in the cluster, and count which pods served the errors.
+
+More, from easy to hard, with no cluster needed: [CICD_EXERCISES.md](CICD_EXERCISES.md).

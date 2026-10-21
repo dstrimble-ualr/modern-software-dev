@@ -78,6 +78,9 @@ Without installing it: `docker run --rm -i -e BASE_URL=http://host.docker.intern
 Under load, some requests fail with `sqlite3.InterfaceError`. That is a real bug the functional
 tests cannot see; [CICD_PRESENTATION.md](CICD_PRESENTATION.md) uses it as a live demo.
 
+[CICD_EXERCISES.md](CICD_EXERCISES.md) has hands-on exercises for Docker, k6, and GitHub Actions,
+from easy to hard, including finding and fixing that bug.
+
 ## CI/CD
 
 GitHub Actions runs [`../.github/workflows/python.yml`](../.github/workflows/python.yml)
